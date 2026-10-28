@@ -145,6 +145,9 @@ class AttendanceRecord(object):
     def dates(self):
         return sorted(self.day_cols)
 
+    def employees_by_id(self):
+        return dict((e.user_id, e) for e in self.employees)
+
     # ----------------------------------------------------------------- write
     def _extra_row_formats(self, emp):
         """Cell formats for an added punch row: copy a 2nd/3rd punch row of any employee."""

@@ -16,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover
     from urllib import quote
 
-from . import delivery, memory, record, rules
+from . import delivery, memory, preview, record, rules
 from .record import to_min, to_text
 
 APP_TITLE = "MPT Attendance Fixer"
@@ -185,6 +185,7 @@ class App(object):
         # Packed before the review list so it always stays visible on small screens.
         out = ttk.LabelFrame(root, text="4. Save and email")
         out.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
+        ttk.Button(out, text="Preview attendance record", command=self.preview).pack(side="left", padx=8, pady=6)
         ttk.Button(out, text="Save files for HR", command=self.save).pack(side="left", padx=8, pady=6)
         self.out_info = ttk.Label(out, text="")
         self.out_info.pack(side="left", padx=8)
@@ -476,20 +477,7 @@ class App(object):
             return
 
         try:
-            # Re-read the original so saving twice never stacks changes.
-            rec = record.AttendanceRecord(self.paths["record"].get())
-            originals = dict(((e.user_id, d), list(t)) for e in rec.employees for d, t in e.days.items())
-            mem = self.memory(cutoff)
-            mem.restore(rec, cutoff)
-            by_id = dict((e.user_id, e) for e in rec.employees)
-            log = []
-            for s in self.suggestions:
-                if s.status in ("accepted", "edited"):
-                    emp = by_id[s.emp.user_id]
-                    rec.set_day(emp, s.date, s.proposed)
-                    log.append("%s  %s  %s  ->  %s" % (s.emp.name, s.date.isoformat(),
-                                                       s.describe(s.original) or "(none)",
-                                                       s.describe(s.proposed) or "(absent)"))
+            rec, originals, mem, _sent, log = self.build(cutoff)
             base = os.path.dirname(self.paths["record"].get())
             outlet = self.outlet.get().strip() or self.settings["outlet"]
             folder = delivery.output_folder(base, self.settings["subject_prefix"], cutoff)
@@ -512,6 +500,59 @@ class App(object):
             return
         self.out_info.config(text="Saved to: " + folder)
         self.show_send(folder, cutoff, saved)
+
+    def build(self, cutoff):
+        """The record as it will be saved: fresh download + days sent before + accepted fixes."""
+        # Re-read the original so saving twice never stacks changes.
+        rec = record.AttendanceRecord(self.paths["record"].get())
+        originals = dict(((e.user_id, d), list(t)) for e in rec.employees for d, t in e.days.items())
+        mem = self.memory(cutoff)
+        sent = set((uid, d) for uid, d in mem.locked(cutoff))
+        mem.restore(rec, cutoff)
+        by_id = dict((e.user_id, e) for e in rec.employees)
+        log = []
+        for s in self.suggestions:
+            if s.status in ("accepted", "edited"):
+                emp = by_id[s.emp.user_id]
+                rec.set_day(emp, s.date, s.proposed)
+                sent.discard((emp.user_id, s.date))
+                log.append("%s  %s  %s  ->  %s" % (s.emp.name, s.date.isoformat(),
+                                                   s.describe(s.original) or "(none)",
+                                                   s.describe(s.proposed) or "(absent)"))
+        return rec, originals, mem, sent, log
+
+    def preview(self):
+        if not self.record:
+            messagebox.showinfo(APP_TITLE, "Choose the Employee Attendance Record first.")
+            return
+        cutoff = self.get_cutoff()
+        if not cutoff:
+            return
+        try:
+            rec, originals, _mem, sent, _log = self.build(cutoff)
+        except Exception as e:
+            traceback.print_exc()
+            messagebox.showerror(APP_TITLE, "Preview failed:\n%s" % e)
+            return
+        sent = set(k for k in sent if originals.get(k, []) != rec.employees_by_id()[k[0]].days.get(k[1], []))
+        preview.PreviewWindow(self.root, rec, originals, sent, self.rules, cutoff,
+                              "Preview - " + delivery.file_name("record", self.outlet.get().strip()
+                                                                or self.settings["outlet"], cutoff))
+
+    def preview_saved(self, path, cutoff):
+        """Preview the file that was actually written, compared with the machine download."""
+        try:
+            rec = record.AttendanceRecord(path)
+            raw = record.AttendanceRecord(self.paths["record"].get())
+        except Exception as e:
+            messagebox.showerror(APP_TITLE, "Preview failed:\n%s" % e)
+            return
+        originals = dict(((e.user_id, d), list(t)) for e in raw.employees for d, t in e.days.items())
+        by_id = rec.employees_by_id()
+        sent = set(k for k in self.memory(cutoff).locked(cutoff)
+                   if k[0] in by_id and originals.get(k, []) != by_id[k[0]].days.get(k[1], []))
+        preview.PreviewWindow(self.root, rec, originals, sent, self.rules, cutoff,
+                              "Saved file - " + os.path.basename(path))
 
     def _write_log(self, cutoff, lines):
         try:
@@ -547,6 +588,8 @@ class App(object):
                                                                  sticky="w", padx=8)
         btns = ttk.Frame(top)
         btns.grid(row=10, column=0, columnspan=3, sticky="e", **pad)
+        ttk.Button(btns, text="Preview saved record", command=lambda: self.preview_saved(saved[0], cutoff)).pack(
+            side="left", padx=4)
         ttk.Button(btns, text="Open folder", command=lambda: self.open_path(folder)).pack(side="left", padx=4)
         ttk.Button(btns, text="Open email program", command=lambda: webbrowser.open(
             "mailto:%s?subject=%s" % (to, quote(subj)))).pack(side="left", padx=4)

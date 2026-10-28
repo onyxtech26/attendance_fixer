@@ -22,7 +22,12 @@ reports ready to email to HR.
    Nothing changes until someone presses **Accept**, **Accept all** or **Edit...**.
    **Other times** gives a new set of natural-looking times. **Add / edit any day...** lets you
    key in any day by hand (for example an empty day, or the rest of today).
-4. **Save files for HR.** This makes a folder next to the downloaded files, for example
+4. **Preview attendance record.** This shows the Employee Attendance Record exactly as it will
+   be saved, laid out like the sheet. Colours show what changed: yellow = changed now,
+   green = kept as sent before, red = still has a problem, white = untouched from the machine.
+   Click a day to see the machine's punches next to what will be saved. After saving, the
+   **Preview saved record** button shows the file that was actually written.
+5. **Save files for HR.** This makes a folder next to the downloaded files, for example
    `MPT ATTENDANCE 01.10.2026 - 25.10.2026`, holding:
    - `Employee Attendance Record MRT 01.10.26-25.10.26.xls` (fixed, still locked like the original)
    - `Attendance Report MRT 01.10.26-25.10.26.xls` (copied as-is)
