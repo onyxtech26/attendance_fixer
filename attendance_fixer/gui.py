@@ -16,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover
     from urllib import quote
 
-from . import delivery, record, rules
+from . import delivery, memory, record, rules
 from .record import to_min, to_text
 
 APP_TITLE = "MPT Attendance Fixer"
@@ -140,7 +140,6 @@ class App(object):
         self.paths = {k: tk.StringVar() for k, _ in KIND_LABELS}
         self.record = None
         self.suggestions = []
-        self.manual = {}            # (emp index, date) -> (shift, times) edited by hand
         root.title(APP_TITLE)
         root.geometry("1100x640")
         root.minsize(900, 520)
@@ -178,6 +177,8 @@ class App(object):
         ttk.Entry(per, textvariable=self.outlet, width=8).grid(row=0, column=3, **pad)
         self.outlet.trace_add("write", lambda *a: self.refresh_period())
         ttk.Button(per, text="Check attendance", command=self.check).grid(row=0, column=4, **pad)
+        ttk.Button(per, text="Forget what was sent this month...", command=self.forget).grid(
+            row=0, column=5, **pad)
         self.period_info = ttk.Label(per, text="Choose the files first.", foreground="#444")
         self.period_info.grid(row=1, column=0, columnspan=6, sticky="w", **pad)
 
@@ -207,6 +208,7 @@ class App(object):
         self.tree.tag_configure("accepted", background="#dff3df")
         self.tree.tag_configure("edited", background="#dce9fb")
         self.tree.tag_configure("rejected", background="#eeeeee", foreground="#888")
+        self.tree.tag_configure("sent", background="#e8f0e8", foreground="#557755")
         self.tree.bind("<Double-1>", lambda e: self.edit_selected())
 
         bar = ttk.Frame(rev)
@@ -258,7 +260,6 @@ class App(object):
         self.cutoff_box["values"] = [d.strftime("%d.%m.%Y") for d in opts]
         self.cutoff.set(delivery.default_cutoff(self.record.end).strftime("%d.%m.%Y"))
         self.suggestions = []
-        self.manual = {}
         self.refresh_tree()
         self.refresh_period()
 
@@ -283,7 +284,26 @@ class App(object):
         elif cutoff < self.record.end:
             lines.append("Days after %s will be removed from the Employee Attendance Record."
                          % cutoff.strftime("%d.%m.%Y"))
+        sent_upto = self.memory(cutoff).last_sent_before(cutoff)
+        if sent_upto:
+            lines.append("Days %s to %s were already sent to HR: they are kept exactly as sent. "
+                         "Only the days after that are checked."
+                         % (cutoff.replace(day=1).strftime("%d.%m"), sent_upto.strftime("%d.%m")))
         self.period_info.config(text="\n".join(lines))
+
+    def memory(self, cutoff):
+        return memory.MonthMemory(os.path.join(app_dir(), "memory"), cutoff)
+
+    def forget(self):
+        cutoff = self.get_cutoff()
+        if not cutoff:
+            return
+        if messagebox.askyesno(APP_TITLE, "Forget everything sent to HR for %s?\n\nOnly do this if the "
+                               "earlier files were never sent." % cutoff.strftime("%B %Y")):
+            self.memory(cutoff).forget()
+            self.suggestions = []
+            self.refresh_tree()
+            self.refresh_period()
 
     # ------------------------------------------------------------------ review
     def check(self):
@@ -293,11 +313,19 @@ class App(object):
                 messagebox.showinfo(APP_TITLE, "Choose the Employee Attendance Record first.")
                 return
         cutoff = self.get_cutoff()
-        self.suggestions = rules.analyse(self.rules, self.record, cutoff)
-        self.manual = {}
+        # Start from the downloaded file again, then put back what was already sent.
+        self.record = record.AttendanceRecord(self.paths["record"].get())
+        mem = self.memory(cutoff)
+        sent_upto = mem.last_sent_before(cutoff)
+        self.suggestions = []
+        for emp, date, raw, sent in mem.restore(self.record, cutoff):
+            sug = rules.Suggestion(emp, date, raw, "", sent, ["Fixed earlier, sent to HR - kept as sent"])
+            sug.status = "sent"
+            self.suggestions.append(sug)
+        self.suggestions += rules.analyse(self.rules, self.record, cutoff, after=sent_upto)
         self.refresh_tree()
-        if not self.suggestions:
-            messagebox.showinfo(APP_TITLE, "No problems found.")
+        if not any(s.status == "pending" for s in self.suggestions):
+            messagebox.showinfo(APP_TITLE, "No new problems found.")
 
     def refresh_tree(self):
         sel = self.tree.selection()
@@ -319,7 +347,7 @@ class App(object):
 
     def accept(self):
         for s in self.selected():
-            if s.status != "edited":
+            if s.status not in ("edited", "sent"):
                 s.status = "accepted"
         self.refresh_tree()
 
@@ -331,11 +359,14 @@ class App(object):
 
     def reject(self):
         for s in self.selected():
-            s.status = "rejected"
+            if s.status != "sent":
+                s.status = "rejected"
         self.refresh_tree()
 
     def reroll(self):
         for s in self.selected():
+            if s.status == "sent":
+                continue
             profile = rules.Profile(self.rules, s.emp)
             salt = getattr(s, "salt", 0) + 1
             s.salt = salt
@@ -350,7 +381,10 @@ class App(object):
         if not sel:
             return
         s = sel[0]
-        dlg = EditDialog(self, s.emp, s.date, s.proposed, s.shift)
+        if s.status == "sent" and not messagebox.askyesno(
+                APP_TITLE, "This day was already sent to HR.\nChange it anyway?"):
+            return
+        dlg = EditDialog(self, s.emp, s.date, s.proposed, s.shift or None)
         if dlg.result:
             s.shift, s.proposed = dlg.result
             s.status = "edited"
@@ -392,6 +426,10 @@ class App(object):
                 self.tree.selection_set(str(self.suggestions.index(s)))
                 self.edit_selected()
                 return
+        entry = self.memory(cutoff).entry(emp.user_id, date)
+        if entry and entry.get("sent_in", "") < cutoff.isoformat() and not messagebox.askyesno(
+                APP_TITLE, "This day was already sent to HR.\nChange it anyway?"):
+            return
         times = emp.days.get(date, [])
         profile = rules.Profile(self.rules, emp)
         shift = profile.usual or list(self.rules.shifts)[0]
@@ -440,6 +478,9 @@ class App(object):
         try:
             # Re-read the original so saving twice never stacks changes.
             rec = record.AttendanceRecord(self.paths["record"].get())
+            originals = dict(((e.user_id, d), list(t)) for e in rec.employees for d, t in e.days.items())
+            mem = self.memory(cutoff)
+            mem.restore(rec, cutoff)
             by_id = dict((e.user_id, e) for e in rec.employees)
             log = []
             for s in self.suggestions:
@@ -462,6 +503,8 @@ class App(object):
                 p = self.paths[kind].get()
                 if p:
                     saved.append(delivery.copy_report(p, kind, folder, outlet, cutoff))
+            mem.record_send(rec, cutoff, originals)
+            mem.save()
             self._write_log(cutoff, log)
         except Exception as e:
             traceback.print_exc()

@@ -220,13 +220,15 @@ def _make_consistent(times, rules, rnd):
     return out
 
 
-def analyse(rules, record, cutoff=None, include_ok=False):
-    """Suggestions for every employee/day that has punches, up to `cutoff`."""
+def analyse(rules, record, cutoff=None, include_ok=False, after=None):
+    """Suggestions for every employee/day that has punches, after `after` up to `cutoff`."""
     result = []
     for emp in record.employees:
         profile = Profile(rules, emp)
         for date in record.dates():
             if cutoff is not None and date > cutoff:
+                continue
+            if after is not None and date <= after:
                 continue
             times = emp.days.get(date)
             if not times:

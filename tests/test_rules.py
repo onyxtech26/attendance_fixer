@@ -101,6 +101,52 @@ class DeliveryTest(unittest.TestCase):
         self.assertEqual(delivery.default_cutoff(datetime.date(2026, 2, 28)), datetime.date(2026, 2, 28))
 
 
+class FakeRecord(object):
+    def __init__(self, employees, last_day):
+        self.employees = employees
+        self._dates = [datetime.date(2026, 10, d) for d in range(1, last_day + 1)]
+
+    def dates(self):
+        return self._dates
+
+    def set_day(self, emp, date, times):
+        if times:
+            emp.days[date] = sorted(times)
+        else:
+            emp.days.pop(date, None)
+
+
+class MemoryTest(unittest.TestCase):
+    def test_sent_days_come_back_in_next_download(self):
+        import tempfile
+        from attendance_fixer import memory
+        folder = tempfile.mkdtemp()
+        c15, c25 = datetime.date(2026, 10, 15), datetime.date(2026, 10, 25)
+        raw = {5: ("10:20",) + FULL[1:], 15: ("09:55", "13:31")}
+
+        # 15th: download, fix day 5 (late) and day 15 (download day), send.
+        rec = FakeRecord([employee(raw)], 15)
+        originals = dict(((rec.employees[0].user_id, d), list(v)) for d, v in rec.employees[0].days.items())
+        rec.set_day(rec.employees[0], datetime.date(2026, 10, 5), t(*FULL))
+        rec.set_day(rec.employees[0], datetime.date(2026, 10, 15), t(*FULL))
+        mem = memory.MonthMemory(folder, c15)
+        mem.record_send(rec, c15, originals)
+        mem.save()
+
+        # 25th: new download has the raw punches again (day 15 now complete, but different).
+        raw[15] = ("09:55", "13:31", "14:49", "18:40", "19:58", "21:45")
+        rec2 = FakeRecord([employee(raw)], 25)
+        mem2 = memory.MonthMemory(folder, c25)
+        self.assertEqual(mem2.last_sent_before(c25), c15)
+        changed = mem2.restore(rec2, c25)
+        self.assertEqual(len(changed), 2)
+        self.assertEqual(rec2.employees[0].days[datetime.date(2026, 10, 5)], t(*FULL))
+        self.assertEqual(rec2.employees[0].days[datetime.date(2026, 10, 15)], t(*FULL))
+
+        # Re-doing the 15th itself does not lock its own days.
+        self.assertEqual(memory.MonthMemory(folder, c15).locked(c15), {})
+
+
 class CompoundFileTest(unittest.TestCase):
     def test_round_trip(self):
         cf = cfb.CompoundFile()

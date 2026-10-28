@@ -31,6 +31,21 @@ reports ready to email to HR.
    A window then shows the To address (`hr@mptwatches.com`) and the subject, with Copy buttons,
    plus **Open folder** and **Open email program**. Attach the 3 files and press Send.
 
+### Sending again later in the month (15th → 25th → end of month)
+
+Always download fresh files from the machine. They start from the 1st again with the
+original punches. The app remembers every day it has sent to HR, in the `memory` folder
+next to the app, one file per month. On the next send, those days are put back **exactly as
+they were sent before**, and only the new days are checked. For example, the 1–25 file keeps
+your 1–15 fixes, including the made-up end of the 15th, even though the machine has the real
+punches. Days put back this way show in the list as **Sent** (grey-green). Changing one asks
+for confirmation first.
+
+If a send has to be redone, for example the 15th again, pick that date again. The 15th's
+memory is replaced. **Forget what was sent this month...** clears the month, but only use it
+if those files never went to HR. Keep the `memory` folder with the app if you move it to
+another PC.
+
 The downloaded files are never changed. A list of every change is saved in the `logs` folder
 next to the app.
 
